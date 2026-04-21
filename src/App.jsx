@@ -6,6 +6,11 @@ import { useState, useRef, useEffect } from "react";
 
 const GFONT = `@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap');`;
 const STORAGE_KEY = "comicdraft-v2";
+const PASS_KEY    = "comicdraft-passphrase";
+
+const SB_URL = "https://awzetqsnfetaihfkwlqx.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF3emV0cXNuZmV0YWloZmt3bHF4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3MjAxOTksImV4cCI6MjA5MjI5NjE5OX0.AfiyYEepd5-2vDTb-mZfOm68k2RxQO399gYlJLnia3A";
+const SB_HDR = { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" };
 
 const BT  = ["scene-heading","action","character","dialogue","parenthetical","transition"];
 const BL  = {"scene-heading":"SCENE","action":"ACTION","character":"CHAR","dialogue":"DIALOG","parenthetical":"PAREN","transition":"TRANS"};
@@ -55,7 +60,7 @@ const estRuntime = bit => {
 };
 
 // ═══════════════════════════════════════════════════════════
-// STORAGE (localStorage — works on all devices, syncs via iCloud/Google if PWA)
+// STORAGE
 // ═══════════════════════════════════════════════════════════
 
 function saveData(data) {
@@ -67,6 +72,33 @@ function loadData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
+}
+
+// ═══════════════════════════════════════════════════════════
+// SUPABASE SYNC
+// ═══════════════════════════════════════════════════════════
+
+async function sha256(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sbSave(hash, data) {
+  const r = await fetch(`${SB_URL}/rest/v1/user_data`, {
+    method: "POST",
+    headers: { ...SB_HDR, "Prefer": "resolution=merge-duplicates" },
+    body: JSON.stringify({ passphrase_hash: hash, data, updated_at: new Date().toISOString() }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+async function sbLoad(hash) {
+  const r = await fetch(`${SB_URL}/rest/v1/user_data?passphrase_hash=eq.${hash}&select=data`, {
+    headers: SB_HDR,
+  });
+  if (!r.ok) throw new Error(await r.text());
+  const rows = await r.json();
+  return rows[0]?.data || null;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -194,39 +226,97 @@ const SS = {id:uid(),title:"Late Night at Mel's",created:Date.now(),blocks:[
 // ═══════════════════════════════════════════════════════════
 
 export default function App() {
-  const [view,     setView]     = useState("screenplay");
-  const [scripts,  setScripts]  = useState([]);
-  const [bits,     setBits]     = useState([]);
-  const [sets,     setSets]     = useState([]);
-  const [scriptId, setScriptId] = useState(null);
-  const [bitId,    setBitId]    = useState(null);
-  const [setId,    setSetId]    = useState(null);
-  const [query,    setQuery]    = useState("");
-  const [modal,    setModal]    = useState(null);
-  const [loaded,   setLoaded]   = useState(false);
+  const [view,       setView]       = useState("screenplay");
+  const [scripts,    setScripts]    = useState([]);
+  const [bits,       setBits]       = useState([]);
+  const [sets,       setSets]       = useState([]);
+  const [scriptId,   setScriptId]   = useState(null);
+  const [bitId,      setBitId]      = useState(null);
+  const [setId,      setSetId]      = useState(null);
+  const [query,      setQuery]      = useState("");
+  const [modal,      setModal]      = useState(null);
+  const [loaded,     setLoaded]     = useState(false);
+  const [passphrase, setPassphrase] = useState(() => localStorage.getItem(PASS_KEY) || "");
+  const [hashRef]                   = [useRef(null)];
+  const [syncStatus, setSyncStatus] = useState("off"); // "off"|"idle"|"syncing"|"synced"|"error"
+  const syncTimer                   = useRef(null);
 
-  // Load from localStorage on mount
+  // Load from localStorage + Supabase on mount
   useEffect(() => {
-    const d = loadData();
-    if (d?.scripts?.length) {
-      setScripts(d.scripts); setScriptId(d.scripts[0].id);
-      setBits(d.bits || []); setBitId(d.bits?.[0]?.id || null);
-      setSets(d.sets || []); setSetId(d.sets?.[0]?.id || null);
-    } else {
-      // First run — load sample data
-      const set0 = {id:uid(),title:"Weekend Club Set",bitIds:[SB1.id,SB2.id,SB3.id],created:Date.now()};
-      setScripts([SS]);          setScriptId(SS.id);
-      setBits([SB1,SB2,SB3]);    setBitId(SB1.id);
-      setSets([set0]);           setSetId(set0.id);
+    async function init() {
+      let cloud = null;
+      const saved = localStorage.getItem(PASS_KEY);
+      if (saved) {
+        try {
+          const h = await sha256(saved);
+          hashRef.current = h;
+          setSyncStatus("syncing");
+          cloud = await sbLoad(h);
+          setSyncStatus("idle");
+        } catch { setSyncStatus("error"); }
+      }
+      const local = loadData();
+      const d = cloud || local;
+      if (d?.scripts?.length) {
+        setScripts(d.scripts); setScriptId(d.scripts[0].id);
+        setBits(d.bits || []); setBitId(d.bits?.[0]?.id || null);
+        setSets(d.sets || []); setSetId(d.sets?.[0]?.id || null);
+      } else {
+        const set0 = {id:uid(),title:"Weekend Club Set",bitIds:[SB1.id,SB2.id,SB3.id],created:Date.now()};
+        setScripts([SS]);       setScriptId(SS.id);
+        setBits([SB1,SB2,SB3]); setBitId(SB1.id);
+        setSets([set0]);        setSetId(set0.id);
+      }
+      setLoaded(true);
     }
-    setLoaded(true);
+    init();
   }, []);
 
-  // Auto-save to localStorage whenever data changes
+  // Auto-save: localStorage immediately, Supabase debounced
   useEffect(() => {
     if (!loaded) return;
     saveData({ scripts, bits, sets });
+    const hash = hashRef.current;
+    if (!hash) return;
+    clearTimeout(syncTimer.current);
+    setSyncStatus("syncing");
+    syncTimer.current = setTimeout(async () => {
+      try {
+        await sbSave(hash, { scripts, bits, sets });
+        setSyncStatus("synced");
+        setTimeout(() => setSyncStatus("idle"), 2000);
+      } catch { setSyncStatus("error"); }
+    }, 1500);
   }, [scripts, bits, sets, loaded]);
+
+  // Connect or disconnect a passphrase
+  const connectPassphrase = async (p) => {
+    const trimmed = p.trim();
+    if (!trimmed) {
+      localStorage.removeItem(PASS_KEY);
+      setPassphrase("");
+      hashRef.current = null;
+      setSyncStatus("off");
+      return;
+    }
+    localStorage.setItem(PASS_KEY, trimmed);
+    setPassphrase(trimmed);
+    setSyncStatus("syncing");
+    try {
+      const h = await sha256(trimmed);
+      hashRef.current = h;
+      const cloud = await sbLoad(h);
+      if (cloud?.scripts?.length) {
+        setScripts(cloud.scripts); setScriptId(cloud.scripts[0].id);
+        setBits(cloud.bits || []); setBitId(cloud.bits?.[0]?.id || null);
+        setSets(cloud.sets || []); setSetId(cloud.sets?.[0]?.id || null);
+      } else {
+        await sbSave(h, { scripts, bits, sets });
+      }
+      setSyncStatus("synced");
+      setTimeout(() => setSyncStatus("idle"), 2000);
+    } catch { setSyncStatus("error"); }
+  };
 
   const updScript = (id,u) => setScripts(p=>p.map(s=>s.id===id?{...s,...u}:s));
   const updBit    = (id,u) => setBits(p=>p.map(b=>b.id===id?{...b,...u}:b));
@@ -292,7 +382,8 @@ export default function App() {
       `}</style>
 
       <AppHeader view={view} setView={setView} query={query} setQuery={setQuery}
-        onNewScript={addScript} onNewBit={addBit} onNewSet={addSet} />
+        onNewScript={addScript} onNewBit={addBit} onNewSet={addSet}
+        passphrase={passphrase} syncStatus={syncStatus} onConnect={connectPassphrase} />
 
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
@@ -358,9 +449,16 @@ export default function App() {
 // HEADER
 // ═══════════════════════════════════════════════════════════
 
-function AppHeader({view,setView,query,setQuery,onNewScript,onNewBit,onNewSet}) {
+function AppHeader({view,setView,query,setQuery,onNewScript,onNewBit,onNewSet,passphrase,syncStatus,onConnect}) {
+  const [showSync, setShowSync] = useState(false);
+  const [input,    setInput]    = useState(passphrase||"");
   const tabs=[["screenplay","📽","Screenplay"],["standup","🎤","Stand-Up"],["sets","🎬","Sets"],["search","🔍","Search"]];
+
+  const syncLabel = { off:"☁ Sync", idle:"☁ Synced", syncing:"↻ Sync…", synced:"✓ Synced", error:"⚠ Sync" };
+  const syncColor = { off:T.textMuted, idle:T.textSec, syncing:T.accent, synced:T.green, error:T.red };
+
   return (
+    <>
     <header style={{display:"flex",alignItems:"center",gap:"10px",padding:"8px 16px",borderBottom:`1px solid ${T.border}`,background:T.surface,flexShrink:0,flexWrap:"wrap"}}>
       <span style={{fontFamily:T.mono,fontSize:"13px",fontWeight:"700",color:T.accent,letterSpacing:"0.08em",whiteSpace:"nowrap"}}>✍ COMIC DRAFT</span>
       <div style={{display:"flex",background:T.card,borderRadius:"7px",padding:"3px",border:`1px solid ${T.border}`,flexShrink:0}}>
@@ -379,12 +477,40 @@ function AppHeader({view,setView,query,setQuery,onNewScript,onNewBit,onNewSet}) 
           style={{flex:1,minWidth:"140px",maxWidth:"320px",background:T.card,border:`1px solid ${T.border}`,color:T.text,padding:"5px 10px",borderRadius:"6px",fontSize:"12px",outline:"none",caretColor:T.accent}}
         />
       )}
-      <div style={{marginLeft:"auto",display:"flex",gap:"5px",flexShrink:0}}>
+      <div style={{marginLeft:"auto",display:"flex",gap:"5px",flexShrink:0,alignItems:"center"}}>
         {[["+ Script",onNewScript],["+ Bit",onNewBit],["+ Set",onNewSet]].map(([l,fn])=>(
           <button key={l} onClick={fn} className="top-btn" style={{background:"transparent",border:`1px solid ${T.borderLight}`,color:T.textSec,padding:"4px 9px",borderRadius:"5px",cursor:"pointer",fontSize:"10px",fontWeight:"500",fontFamily:"inherit",transition:"all 0.12s"}}>{l}</button>
         ))}
+        <button onClick={()=>{setInput(passphrase||"");setShowSync(s=>!s);}} className="top-btn"
+          style={{background:"transparent",border:`1px solid ${T.borderLight}`,color:syncColor[syncStatus]||T.textSec,padding:"4px 9px",borderRadius:"5px",cursor:"pointer",fontSize:"10px",fontWeight:"600",fontFamily:"inherit",transition:"all 0.12s",whiteSpace:"nowrap"}}>
+          {syncLabel[syncStatus]||"☁ Sync"}
+        </button>
       </div>
     </header>
+
+    {showSync && (
+      <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"12px 16px",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+        <span style={{fontSize:"11px",color:T.textSec,whiteSpace:"nowrap"}}>Sync passphrase — use the same phrase on every device:</span>
+        <input value={input} onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"){onConnect(input);setShowSync(false);} if(e.key==="Escape")setShowSync(false); }}
+          placeholder="e.g. purple-microphone-7"
+          style={{flex:1,minWidth:"180px",maxWidth:"280px",background:T.card,border:`1px solid ${T.borderLight}`,color:T.text,padding:"6px 10px",borderRadius:"6px",fontSize:"12px",outline:"none",caretColor:T.accent,fontFamily:"inherit"}}
+        />
+        <button onClick={()=>{onConnect(input);setShowSync(false);}}
+          style={{background:T.accent,border:"none",color:T.bg,padding:"6px 14px",borderRadius:"6px",cursor:"pointer",fontSize:"12px",fontWeight:"600",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          {passphrase?"Update":"Connect"}
+        </button>
+        {passphrase && (
+          <button onClick={()=>{onConnect("");setShowSync(false);}}
+            style={{background:"transparent",border:`1px solid ${T.red}`,color:T.red,padding:"6px 14px",borderRadius:"6px",cursor:"pointer",fontSize:"12px",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            Disconnect
+          </button>
+        )}
+        <button onClick={()=>setShowSync(false)}
+          style={{background:"transparent",border:"none",color:T.textMuted,cursor:"pointer",fontSize:"18px",lineHeight:1,fontFamily:"inherit",padding:"0 4px"}}>×</button>
+      </div>
+    )}
+    </>
   );
 }
 

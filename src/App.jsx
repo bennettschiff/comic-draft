@@ -237,9 +237,10 @@ export default function App() {
   const [modal,      setModal]      = useState(null);
   const [loaded,     setLoaded]     = useState(false);
   const [passphrase, setPassphrase] = useState(() => localStorage.getItem(PASS_KEY) || "");
-  const [hashRef]                   = [useRef(null)];
+  const hashRef                     = useRef(null);
   const [syncStatus, setSyncStatus] = useState("off"); // "off"|"idle"|"syncing"|"synced"|"error"
   const syncTimer                   = useRef(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   // Load from localStorage + Supabase on mount
   useEffect(() => {
@@ -288,6 +289,9 @@ export default function App() {
       } catch { setSyncStatus("error"); }
     }, 1500);
   }, [scripts, bits, sets, loaded]);
+
+  // Close drawer on item selection
+  useEffect(() => { setMobileOpen(false); }, [scriptId, bitId, setId]);
 
   // Connect or disconnect a passphrase
   const connectPassphrase = async (p) => {
@@ -376,8 +380,23 @@ export default function App() {
         .result-card:hover{border-color:${T.accent}!important}
         .top-btn:hover{border-color:${T.accent}!important;color:${T.accent}!important}
         @media (max-width: 600px) {
-          .sidebar { display: none !important }
-          .mob-tab { display: flex !important }
+          .sidebar {
+            position: fixed !important;
+            top: 0 !important; bottom: 0 !important; left: 0 !important;
+            width: 82vw !important; max-width: 300px !important;
+            z-index: 200 !important;
+            transform: translateX(-105%);
+            transition: transform 0.22s ease;
+          }
+          .sidebar.mob-open {
+            transform: translateX(0) !important;
+            box-shadow: 6px 0 28px rgba(0,0,0,0.65);
+          }
+          .mob-hide { display: none !important; }
+          .mob-bar { display: flex !important; }
+          .mob-close { display: flex !important; }
+          .mob-backdrop { display: block !important; }
+          main { padding-bottom: 60px !important; }
         }
       `}</style>
 
@@ -387,11 +406,17 @@ export default function App() {
 
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
+        {mobileOpen && (
+          <div className="mob-backdrop" onClick={()=>setMobileOpen(false)}
+            style={{display:"none",position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:199}} />
+        )}
+
         {view==="screenplay" && <>
           <ScreenplaySidebar scripts={scripts} activeId={scriptId} onSelect={setScriptId}
             onAdd={addScript} onDup={dupScript} onDel={delScript}
             onRename={(id,t)=>updScript(id,{title:t})}
-            onExport={s=>exportScriptTxt(s)} onPrint={s=>printScreenplay(s)} />
+            onExport={s=>exportScriptTxt(s)} onPrint={s=>printScreenplay(s)}
+            mobOpen={mobileOpen} onMobClose={()=>setMobileOpen(false)} />
           <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
             {activeScript
               ? <ScreenplayEditor script={activeScript}
@@ -401,11 +426,13 @@ export default function App() {
                   onExport={()=>exportScriptTxt(activeScript)} />
               : <Empty label="screenplay" onAdd={addScript} />}
           </main>
+          <MobileBar label={activeScript?.title||"Scripts"} onOpen={()=>setMobileOpen(true)} onAdd={addScript} />
         </>}
 
         {view==="standup" && <>
           <StandupSidebar bits={bits} activeId={bitId} onSelect={setBitId}
-            onAdd={addBit} onDup={dupBit} onDel={delBit} allTags={allTags} />
+            onAdd={addBit} onDup={dupBit} onDel={delBit} allTags={allTags}
+            mobOpen={mobileOpen} onMobClose={()=>setMobileOpen(false)} />
           <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
             {activeBit
               ? <BitEditor bit={activeBit} onUpdate={u=>updBit(activeBit.id,u)}
@@ -413,12 +440,14 @@ export default function App() {
                   onShowPerf={()=>setModal({type:"perf",bitId:activeBit.id})} />
               : <Empty label="bit" onAdd={addBit} />}
           </main>
+          <MobileBar label={activeBit?.title||"Bits"} onOpen={()=>setMobileOpen(true)} onAdd={addBit} />
         </>}
 
         {view==="sets" && <>
           <SetSidebar sets={sets} activeId={setId} onSelect={setSetId}
             onAdd={addSet} onDel={delSet}
-            onRename={(id,t)=>updSet(id,{title:t})} />
+            onRename={(id,t)=>updSet(id,{title:t})}
+            mobOpen={mobileOpen} onMobClose={()=>setMobileOpen(false)} />
           <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
             {activeSet
               ? <SetEditor set={activeSet} bits={bits}
@@ -426,6 +455,7 @@ export default function App() {
                   onExport={()=>exportSetTxt(activeSet,bits)} />
               : <Empty label="set" onAdd={addSet} />}
           </main>
+          <MobileBar label={activeSet?.title||"Sets"} onOpen={()=>setMobileOpen(true)} onAdd={addSet} />
         </>}
 
         {view==="search" && (
@@ -478,9 +508,11 @@ function AppHeader({view,setView,query,setQuery,onNewScript,onNewBit,onNewSet,pa
         />
       )}
       <div style={{marginLeft:"auto",display:"flex",gap:"5px",flexShrink:0,alignItems:"center"}}>
-        {[["+ Script",onNewScript],["+ Bit",onNewBit],["+ Set",onNewSet]].map(([l,fn])=>(
-          <button key={l} onClick={fn} className="top-btn" style={{background:"transparent",border:`1px solid ${T.borderLight}`,color:T.textSec,padding:"4px 9px",borderRadius:"5px",cursor:"pointer",fontSize:"10px",fontWeight:"500",fontFamily:"inherit",transition:"all 0.12s"}}>{l}</button>
-        ))}
+        <div className="mob-hide" style={{display:"flex",gap:"5px"}}>
+          {[["+ Script",onNewScript],["+ Bit",onNewBit],["+ Set",onNewSet]].map(([l,fn])=>(
+            <button key={l} onClick={fn} className="top-btn" style={{background:"transparent",border:`1px solid ${T.borderLight}`,color:T.textSec,padding:"4px 9px",borderRadius:"5px",cursor:"pointer",fontSize:"10px",fontWeight:"500",fontFamily:"inherit",transition:"all 0.12s"}}>{l}</button>
+          ))}
+        </div>
         <button onClick={()=>{setInput(passphrase||"");setShowSync(s=>!s);}} className="top-btn"
           style={{background:"transparent",border:`1px solid ${T.borderLight}`,color:syncColor[syncStatus]||T.textSec,padding:"4px 9px",borderRadius:"5px",cursor:"pointer",fontSize:"10px",fontWeight:"600",fontFamily:"inherit",transition:"all 0.12s",whiteSpace:"nowrap"}}>
           {syncLabel[syncStatus]||"☁ Sync"}
@@ -518,14 +550,20 @@ function AppHeader({view,setView,query,setQuery,onNewScript,onNewBit,onNewSet,pa
 // SHARED SIDEBAR PIECES
 // ═══════════════════════════════════════════════════════════
 
-function SbHeader({label,onAdd}) {
+function SbHeader({label,onAdd,onClose}) {
   return (
     <div style={{padding:"11px 14px",borderBottom:`1px solid ${T.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
       <span style={{fontSize:"10px",fontWeight:"600",letterSpacing:"0.1em",color:T.textMuted,textTransform:"uppercase"}}>{label}</span>
-      <button onClick={onAdd} style={{background:"transparent",border:`1px solid ${T.borderLight}`,color:T.accent,width:"20px",height:"20px",borderRadius:"4px",cursor:"pointer",fontSize:"16px",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1,fontFamily:"inherit"}}
-        onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
-        onMouseLeave={e=>e.currentTarget.style.borderColor=T.borderLight}
-      >+</button>
+      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        <button className="mob-close" onClick={onClose}
+          style={{display:"none",background:"transparent",border:"none",color:T.textMuted,cursor:"pointer",fontSize:"20px",lineHeight:1,fontFamily:"inherit",padding:"0 2px"}}>
+          ×
+        </button>
+        <button onClick={onAdd} style={{background:"transparent",border:`1px solid ${T.borderLight}`,color:T.accent,width:"20px",height:"20px",borderRadius:"4px",cursor:"pointer",fontSize:"16px",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1,fontFamily:"inherit"}}
+          onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
+          onMouseLeave={e=>e.currentTarget.style.borderColor=T.borderLight}
+        >+</button>
+      </div>
     </div>
   );
 }
@@ -543,13 +581,13 @@ function IBtn({onClick,label,danger=false}) {
 // SCREENPLAY SIDEBAR
 // ═══════════════════════════════════════════════════════════
 
-function ScreenplaySidebar({scripts,activeId,onSelect,onAdd,onDup,onDel,onRename,onExport,onPrint}) {
+function ScreenplaySidebar({scripts,activeId,onSelect,onAdd,onDup,onDel,onRename,onExport,onPrint,mobOpen,onMobClose}) {
   const [editing,setEditing]=useState(null);
   const [val,setVal]=useState("");
   const commit=(id,fb)=>{onRename(id,val.trim()||fb);setEditing(null);};
   return (
-    <aside className="sidebar" style={{width:"200px",background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden"}}>
-      <SbHeader label="Scripts" onAdd={onAdd} />
+    <aside className={`sidebar${mobOpen?" mob-open":""}`} style={{width:"200px",background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden"}}>
+      <SbHeader label="Scripts" onAdd={onAdd} onClose={onMobClose} />
       <div style={{flex:1,overflowY:"auto",padding:"6px"}}>
         {scripts.map(s=>(
           <div key={s.id} className="sb-row" onClick={()=>onSelect(s.id)} style={{padding:"8px 10px",borderRadius:"6px",cursor:"pointer",marginBottom:"2px",background:activeId===s.id?T.card:"transparent",border:`1px solid ${activeId===s.id?T.border:"transparent"}`}}>
@@ -646,12 +684,12 @@ function ScreenplayEditor({script,onUpdateBlocks,onRename,onPrint,onExport}) {
 // STANDUP SIDEBAR
 // ═══════════════════════════════════════════════════════════
 
-function StandupSidebar({bits,activeId,onSelect,onAdd,onDup,onDel,allTags}) {
+function StandupSidebar({bits,activeId,onSelect,onAdd,onDup,onDel,allTags,mobOpen,onMobClose}) {
   const [tagFilter,setTagFilter]=useState(null);
   const filtered=tagFilter?bits.filter(b=>b.tags.includes(tagFilter)):bits;
   return (
-    <aside className="sidebar" style={{width:"200px",background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden"}}>
-      <SbHeader label="Bits" onAdd={onAdd} />
+    <aside className={`sidebar${mobOpen?" mob-open":""}`} style={{width:"200px",background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden"}}>
+      <SbHeader label="Bits" onAdd={onAdd} onClose={onMobClose} />
       {allTags.length>0 && (
         <div style={{padding:"8px 10px",borderBottom:`1px solid ${T.border}`,display:"flex",flexWrap:"wrap",gap:"4px"}}>
           {allTags.map(t=>(
@@ -914,13 +952,13 @@ function PerfModal({bit,onUpdate,onClose}) {
 // SET SIDEBAR
 // ═══════════════════════════════════════════════════════════
 
-function SetSidebar({sets,activeId,onSelect,onAdd,onDel,onRename}) {
+function SetSidebar({sets,activeId,onSelect,onAdd,onDel,onRename,mobOpen,onMobClose}) {
   const [editing,setEditing]=useState(null);
   const [val,setVal]=useState("");
   const commit=(id,fb)=>{onRename(id,val.trim()||fb);setEditing(null);};
   return (
-    <aside className="sidebar" style={{width:"200px",background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden"}}>
-      <SbHeader label="Sets" onAdd={onAdd} />
+    <aside className={`sidebar${mobOpen?" mob-open":""}`} style={{width:"200px",background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden"}}>
+      <SbHeader label="Sets" onAdd={onAdd} onClose={onMobClose} />
       <div style={{flex:1,overflowY:"auto",padding:"6px"}}>
         {sets.map(s=>(
           <div key={s.id} className="sb-row" onClick={()=>onSelect(s.id)} style={{padding:"8px 10px",borderRadius:"6px",cursor:"pointer",marginBottom:"2px",background:activeId===s.id?T.card:"transparent",border:`1px solid ${activeId===s.id?T.border:"transparent"}`}}>
@@ -1082,6 +1120,36 @@ function SearchView({query,setQuery,scripts,bits,onOpenScript,onOpenBit}) {
           ))}
         </>}
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// MOBILE BAR
+// ═══════════════════════════════════════════════════════════
+
+function MobileBar({label,onOpen,onAdd}) {
+  return (
+    <div className="mob-bar" style={{
+      display:"none",position:"fixed",bottom:0,left:0,right:0,
+      background:T.surface,borderTop:`1px solid ${T.border}`,
+      padding:"10px 14px",alignItems:"center",gap:"10px",zIndex:100,
+    }}>
+      <button onClick={onOpen} style={{
+        flex:1,background:T.card,border:`1px solid ${T.border}`,color:T.textSec,
+        padding:"10px 14px",borderRadius:"8px",cursor:"pointer",fontSize:"13px",
+        fontFamily:"inherit",display:"flex",alignItems:"center",gap:"10px",
+        overflow:"hidden",textAlign:"left",
+      }}>
+        <span style={{fontSize:"17px",flexShrink:0}}>☰</span>
+        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{label}</span>
+      </button>
+      <button onClick={onAdd} style={{
+        background:T.accent,border:"none",color:T.bg,
+        width:"44px",height:"44px",borderRadius:"10px",cursor:"pointer",
+        fontSize:"26px",fontFamily:"inherit",display:"flex",
+        alignItems:"center",justifyContent:"center",lineHeight:1,flexShrink:0,
+      }}>+</button>
     </div>
   );
 }
